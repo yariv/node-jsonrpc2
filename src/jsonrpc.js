@@ -193,14 +193,24 @@ Server.prototype.handlePOST = function(req, res) {
     // Try to call the method, but intercept errors and call our
     // onFailure handler.
     var method = self.functions[decoded.method];
-    var args = decoded.params.push(function(resp) {
-      onSuccess(resp);
-    });
+    var callback = function(err, result) {
+      if (err) {
+        onFailure(err);
+      } else {
+        onSuccess(result);
+      }
+    };
+
+    // Other various information we want to pass in for the handler to be
+    // able to access.
+    var opt = {
+      req: req,
+      server: self
+    };
 
     try {
-      method.apply(null, decoded.params);
-    }
-    catch(err) {
+      method.call(null, decoded.params, opt, callback);
+    } catch (err) {
       return onFailure(err);
     }
 
