@@ -14,7 +14,7 @@ To install node-jsonrpc2 in the current directory, run:
 Firing up an efficient JSON-RPC server becomes extremely simple:
 
 ``` javascript
-var rpc = require('jsonrpc');
+var rpc = require('jsonrpc2');
 
 function add(first, second) {
     return first + second;
@@ -27,7 +27,7 @@ rpc.listen(8000, 'localhost');
 And creating a client to speak to that server is easy too:
 
 ``` javascript
-var rpc = require('jsonrpc');
+var rpc = require('jsonrpc2');
 var sys = require('sys');
 
 var client = rpc.getClient(8000, 'localhost');
