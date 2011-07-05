@@ -70,6 +70,8 @@ var Client = function(port, host, user, password) {
 function Server() {
   var self = this;
   this.functions = {};
+  this.scopes = {};
+  this.defaultScope = this;
   this.server = http.createServer(function(req, res) {
     Server.trace('<--', 'accepted request');
     if(req.method === 'POST') {
@@ -85,13 +87,17 @@ function Server() {
 //===----------------------------------------------------------------------===//
 // exposeModule
 //===----------------------------------------------------------------------===//
-Server.prototype.exposeModule = function(mod, object) {
+Server.prototype.exposeModule = function(mod, object, scope) {
   var funcs = [];
   for(var funcName in object) {
     var funcObj = object[funcName];
     if(typeof(funcObj) == 'function') {
       this.functions[mod + '.' + funcName] = funcObj;
       funcs.push(funcName);
+
+      if (scope) {
+        this.scopes[mod + '.' + funcName] = scope;
+      }
     }
   }
   Server.trace('***', 'exposing module: ' + mod + ' [funs: ' + funcs.join(', ') 
@@ -103,9 +109,13 @@ Server.prototype.exposeModule = function(mod, object) {
 //===----------------------------------------------------------------------===//
 // expose
 //===----------------------------------------------------------------------===//
-Server.prototype.expose = function(name, func) {
+Server.prototype.expose = function(name, func, scope) {
   Server.trace('***', 'exposing: ' + name);
   this.functions[name] = func;
+
+  if (scope) {
+    this.scopes[name] = scope;
+  }
 }
 
 
@@ -200,6 +210,7 @@ Server.prototype.handlePOST = function(req, res) {
         onSuccess(result);
       }
     };
+    var scope = self.scopes[decoded.method] || this.defaultScope;
 
     // Other various information we want to pass in for the handler to be
     // able to access.
@@ -209,7 +220,7 @@ Server.prototype.handlePOST = function(req, res) {
     };
 
     try {
-      method.call(null, decoded.params, opt, callback);
+      method.call(scope, decoded.params, opt, callback);
     } catch (err) {
       return onFailure(err);
     }
