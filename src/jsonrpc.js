@@ -210,7 +210,7 @@ Server.prototype.handlePOST = function(req, res) {
         onSuccess(result);
       }
     };
-    var scope = self.scopes[decoded.method] || this.defaultScope;
+    var scope = self.scopes[decoded.method] || self.defaultScope;
 
     // Other various information we want to pass in for the handler to be
     // able to access.
