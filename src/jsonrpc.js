@@ -53,7 +53,7 @@ var Client = function(port, host, user, password) {
         var decoded = JSON.parse(buffer);
         if(decoded.hasOwnProperty('result')) {
           if (callback)
-            callback(decoded.result);
+            callback(null, decoded.result);
         }
         else {
           if (errback)
