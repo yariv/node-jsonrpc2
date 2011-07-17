@@ -16,12 +16,14 @@ Firing up an efficient JSON-RPC server becomes extremely simple:
 ``` javascript
 var rpc = require('jsonrpc2');
 
-function add(first, second) {
-    return first + second;
-}
-rpc.expose('add', add);
+var server = new rpc.Server();
 
-rpc.listen(8000, 'localhost');
+function add(args, opt, callback) {
+  callback(null, args[0] + args[1]);
+}
+server.expose('add', add);
+
+server.listen(8000, 'localhost');
 ```
 
 And creating a client to speak to that server is easy too:
@@ -30,9 +32,9 @@ And creating a client to speak to that server is easy too:
 var rpc = require('jsonrpc2');
 var sys = require('sys');
 
-var client = rpc.getClient(8000, 'localhost');
+var client = new rpc.Client(8000, 'localhost');
 
-client.call('add', [1, 2], function(result) {
+client.call('add', [1, 2], function(err, result) {
     sys.puts('1 + 2 = ' + result);
 });
 ```

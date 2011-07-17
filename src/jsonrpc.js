@@ -156,7 +156,7 @@ Server.prototype.handlePOST = function(req, res) {
   var self = this;
   var handle = function (buf) {
     var decoded = JSON.parse(buf);
-    
+
     // Check for the required fields, and if they aren't there, then
     // dispatch to the handleInvalidRequest function.
     if(!(decoded.method && decoded.params && decoded.id)) {
@@ -166,7 +166,7 @@ Server.prototype.handlePOST = function(req, res) {
     if(!self.functions.hasOwnProperty(decoded.method)) {
       return Server.handleInvalidRequest(req, res);
     }
-    
+
     // Build our success handler
     var onSuccess = function(funcResp) {
       Server.trace('-->', 'response (id ' + decoded.id + '): ' + 
@@ -182,7 +182,7 @@ Server.prototype.handlePOST = function(req, res) {
       res.write(encoded);
       res.end();
     };
-    
+
     // Build our failure handler (note that error must not be null)
     var onFailure = function(failure) {
       Server.trace('-->', 'failure: ' + JSON.stringify(failure));
@@ -196,10 +196,10 @@ Server.prototype.handlePOST = function(req, res) {
       res.write(encoded);
       res.end();
     };
-    
+
     Server.trace('<--', 'request (id ' + decoded.id + '): ' + 
                   decoded.method + '(' + decoded.params.join(', ') + ')');
-    
+
     // Try to call the method, but intercept errors and call our
     // onFailure handler.
     var method = self.functions[decoded.method];
