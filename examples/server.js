@@ -1,4 +1,5 @@
 var rpc = require('../src/jsonrpc');
+var events = require('events');
 
 var server = new rpc.Server();
 
@@ -23,7 +24,7 @@ var math = {
   sqrt: function(args, opts, callback) {
     callback(null, Math.sqrt(args[0]));
   }
-}
+};
 server.exposeModule('math', math);
 
 /* Listen on port 8088 */
@@ -51,3 +52,24 @@ var delayed = {
 }
 
 server.exposeModule('delayed', delayed);
+
+// Create a message bus with random events on it
+var firehose = new events.EventEmitter();
+(function emitFirehoseEvent() {
+  firehose.emit('foobar', {data: 'random '+Math.random()});
+  setTimeout(arguments.callee, 200+Math.random()*3000);
+})();
+
+var listen = function (args, opts, callback) {
+  function handleFirehoseEvent(event) {
+    opts.emit('event', event.data);
+  };
+  firehose.on('foobar', handleFirehoseEvent);
+  opts.stream(function () {
+    console.log('connection ended');
+    firehose.removeListener('foobar', handleFirehoseEvent);
+  });
+  callback(null);
+};
+
+server.expose('listen', listen);

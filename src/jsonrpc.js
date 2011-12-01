@@ -1,25 +1,36 @@
 var sys = require('sys');
 var http = require('http');
+var util = require('util');
+var events = require('events');
+var JsonParser = require('jsonparse');
 
 var METHOD_NOT_ALLOWED = "Method Not Allowed\n";
 var INVALID_REQUEST = "Invalid Request\n";
 
 
 //===----------------------------------------------------------------------===//
-// Server Client
+// JSON-RPC HTTP Client
 //===----------------------------------------------------------------------===//
-var Client = function(port, host, user, password) {
+var Client = function (port, host, user, password) {
   this.port = port;
   this.host = host;
   this.user = user;
   this.password = password;
-  
-  this.call = function(method, params, callback, errback, path) {
+
+  this.stream = function (method, params, opts, callback) {
+    if ("function" === typeof opts) {
+      callback = opts;
+      opts = {};
+    }
+    opts = opts || {};
+
     var client = http.createClient(port, host);
-    
+
+    var id = 1;
+
     // First we encode the request into JSON
     var requestJSON = JSON.stringify({
-      'id': '' + (new Date()).getTime(),
+      'id': id,
       'method': method,
       'params': params
     });
@@ -43,34 +54,69 @@ var Client = function(port, host, user, password) {
     });
 
     // Now we'll make a request to the server
-    var request = client.request('POST', path || '/', headers);
+    var request = client.request('POST', opts.path || '/', headers);
     request.write(requestJSON);
-    request.on('response', function(response) {
-      // We need to buffer the response chunks in a nonblocking way.
-      var buffer = '';
-      response.on('data', function(chunk) {
-        buffer = buffer + chunk;
-      });
-      // When all the responses are finished, we decode the JSON and
-      // depending on whether it's got a result or an error, we call
-      // emitSuccess or emitError on the promise.
-      response.on('end', function() {
-        var decoded = JSON.parse(buffer);
-        if(decoded.hasOwnProperty('result')) {
-          if (callback)
-            callback(null, decoded.result);
-        }
-        else {
-          if (errback)
-            errback(decoded.error);
-        }
-      });
+    request.on('response', function (response) {
+      if ("function" === typeof callback) {
+        var connection = new events.EventEmitter();
+        connection.id = id;
+        connection.req = request;
+        connection.res = response;
+        connection.expose = function (method, callback) {
+          connection.on('call:'+method, function (data) {
+            callback.call(null, data.params || []);
+          });
+        };
+        connection.end = function () {
+          this.req.connection.end();
+        };
+        callback(null, connection);
+
+        // We need to buffer the response chunks in a nonblocking way.
+        var parser = new JsonParser();
+        parser.onValue = function (decoded) {
+          if (this.stack.length) return;
+
+          connection.emit('data', decoded);
+          if (decoded.hasOwnProperty('result') || 
+              decoded.hasOwnProperty('error') &&
+              decoded.id === id &&
+              "function" === typeof callback) {
+            connection.emit('result', decoded);
+          } else if (decoded.hasOwnProperty('method')) {
+            connection.emit('call:'+decoded.method, decoded);
+          }
+        };
+        connection.res.on('data', function (chunk) {
+          parser.write(chunk);
+        });
+        connection.res.on('end', function () {
+          // TODO: Issue an error if there has been no valid response message
+        });
+      }
     });
   };
-}
+  this.call = function (method, params, opts, callback) {
+    if ("function" === typeof opts) {
+      callback = opts;
+      opts = {};
+    }
+    opts = opts || {};
+    this.stream(method, params, opts, function (err, conn) {
+      if ("function" === typeof callback) {
+        conn.on('result', function (decoded) {
+          if (!decoded.error) {
+            decoded.error = null;
+          }
+          callback(decoded.error, decoded.result);
+        });
+      }
+    });
+  };
+};
 
 //===----------------------------------------------------------------------===//
-// Server
+// JSON-RPC HTTP Server
 //===----------------------------------------------------------------------===//
 function Server() {
   var self = this;
@@ -162,44 +208,55 @@ Server.prototype.handlePOST = function(req, res) {
   var handle = function (buf) {
     var decoded = JSON.parse(buf);
 
+    var isStreaming = false;
+
     // Check for the required fields, and if they aren't there, then
     // dispatch to the handleInvalidRequest function.
     if(!(decoded.method && decoded.params && decoded.id)) {
-      return Server.handleInvalidRequest(req, res);
+      Server.handleInvalidRequest(req, res);
+      return;
     }
 
     if(!self.functions.hasOwnProperty(decoded.method)) {
-      return Server.handleInvalidRequest(req, res);
+      Server.handleInvalidRequest(req, res);
+      return;
     }
+
+    var reply = function (json) {
+      var encoded = JSON.stringify(json);
+
+      if (!isStreaming) {
+        res.writeHead(200, {'Content-Type': 'application/json',
+                            'Content-Length': encoded.length});
+        res.write(encoded);
+        res.end();
+      } else {
+        res.writeHead(200, {'Content-Type': 'application/json'});
+        res.write(encoded);
+        // Keep connection open
+      }
+    };
 
     // Build our success handler
     var onSuccess = function(funcResp) {
       Server.trace('-->', 'response (id ' + decoded.id + '): ' + 
                     JSON.stringify(funcResp));
 
-      var encoded = JSON.stringify({
+      reply({
         'result': funcResp,
         'error': null,
         'id': decoded.id
       });
-      res.writeHead(200, {'Content-Type': 'application/json',
-                          'Content-Length': encoded.length});
-      res.write(encoded);
-      res.end();
     };
 
     // Build our failure handler (note that error must not be null)
     var onFailure = function(failure) {
       Server.trace('-->', 'failure: ' + JSON.stringify(failure));
-      var encoded = JSON.stringify({
+      reply({
         'result': null,
         'error': failure || 'Unspecified Failure',
         'id': decoded.id
       });
-      res.writeHead(200, {'Content-Type': 'application/json',
-                          'Content-Length': encoded.length});
-      res.write(encoded);
-      res.end();
     };
 
     Server.trace('<--', 'request (id ' + decoded.id + '): ' + 
@@ -215,22 +272,48 @@ Server.prototype.handlePOST = function(req, res) {
         onSuccess(result);
       }
     };
+    // Can be called before the response callback to keep the connection open.
+    var stream = function (onend) {
+      isStreaming = true;
+
+      if ("function" === typeof onend) {
+        res.connection.on('end', onend);
+      }
+    };
+    var emit = function (method, params) {
+      if (!res.connection.writable) return;
+
+      if (!Array.isArray(params)) {
+        params = [params];
+      }
+
+      Server.trace('-->', 'emit (method '+method+'): ' + JSON.stringify(params));
+      var data = JSON.stringify({
+        method: method,
+        params: params,
+        id: null
+      });
+      res.write(data);
+    };
     var scope = self.scopes[decoded.method] || self.defaultScope;
 
     // Other various information we want to pass in for the handler to be
     // able to access.
-    var opt = {
+    var opts = {
       req: req,
-      server: self
+      res: res,
+      server: self,
+      callback: callback,
+      stream: stream,
+      emit: emit
     };
 
     try {
-      method.call(scope, decoded.params, opt, callback);
+      method.call(scope, decoded.params, opts, callback);
     } catch (err) {
-      return onFailure(err);
+      onFailure(err);
     }
-
-  } // function handle(buf)
+  }; // function handle(buf)
 
   req.addListener('data', function(chunk) {
     buffer = buffer + chunk;
@@ -239,7 +322,7 @@ Server.prototype.handlePOST = function(req, res) {
   req.addListener('end', function() {
     handle(buffer);
   });
-}
+};
 
 
 //===----------------------------------------------------------------------===//
@@ -251,8 +334,7 @@ Server.handleNonPOST = function(req, res) {
                       'Allow': 'POST'});
   res.write(METHOD_NOT_ALLOWED);
   res.end();
-}
-
+};
 
 module.exports.Server = Server;
 module.exports.Client = Client;

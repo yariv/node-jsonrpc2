@@ -33,3 +33,15 @@ client.call('delayed.add', [1, 1, 1500], function (err, result) {
 client.call('delayed.echo', ['Echo.', 1500], function (err, result) {
   sys.puts(result);
 });
+
+var counter = 0;
+client.stream('listen', [], function (err, connection) {
+  connection.expose('event', function (params) {
+    console.log('Streaming #'+counter+': '+params[0]);
+    counter++;
+    if (counter > 4) {
+      connection.end();
+    }
+  });
+  console.log('start listening');
+});

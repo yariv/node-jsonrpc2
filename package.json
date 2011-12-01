@@ -12,6 +12,10 @@
 
   "author": "Eric Florenzano <floguy@gmail.com> (eflorenzano.com)",
 
+  "dependencies": {
+    "jsonparse": ">=0.0.1"
+  },
+
   "contributors": [
     "Bill Casarin <bill@casarin.ca> (jb55.com)",
     "Stefan Thomas <justmoon@members.fsf.org> (justmoon.net)"
