@@ -17,7 +17,7 @@ var Client = function (port, host, user, password) {
   this.user = user;
   this.password = password;
 
-  this.stream = function (method, params, opts, callback) {
+  this.raw = function raw(method, params, opts, callback) {
     if ("function" === typeof opts) {
       callback = opts;
       opts = {};
@@ -56,7 +56,17 @@ var Client = function (port, host, user, password) {
     // Now we'll make a request to the server
     var request = client.request('POST', opts.path || '/', headers);
     request.write(requestJSON);
-    request.on('response', function (response) {
+    request.on('response', callback.bind(this, id, request));
+  };
+
+  this.stream = function (method, params, opts, callback) {
+    if ("function" === typeof opts) {
+      callback = opts;
+      opts = {};
+    }
+    opts = opts || {};
+
+    this.raw(method, params, opts, function (id, request, response) {
       if ("function" === typeof callback) {
         var connection = new events.EventEmitter();
         connection.id = id;
@@ -70,7 +80,6 @@ var Client = function (port, host, user, password) {
         connection.end = function () {
           this.req.connection.end();
         };
-        callback(null, connection);
 
         // We need to buffer the response chunks in a nonblocking way.
         var parser = new JsonParser();
@@ -87,8 +96,20 @@ var Client = function (port, host, user, password) {
             connection.emit('call:'+decoded.method, decoded);
           }
         };
+        // Handle headers
+        connection.res.once('data', function (data) {
+          if (connection.res.statusCode === 200) {
+            callback(null, connection);
+          } else {
+            callback(new Error(""+connection.res.statusCode+" "+data));
+          }
+        });
         connection.res.on('data', function (chunk) {
-          parser.write(chunk);
+          try {
+            parser.write(chunk);
+          } catch(err) {
+            // TODO: Is ignoring invalid data the right thing to do?
+          }
         });
         connection.res.on('end', function () {
           // TODO: Issue an error if there has been no valid response message
@@ -102,15 +123,24 @@ var Client = function (port, host, user, password) {
       opts = {};
     }
     opts = opts || {};
-    this.stream(method, params, opts, function (err, conn) {
-      if ("function" === typeof callback) {
-        conn.on('result', function (decoded) {
+    this.raw(method, params, opts, function (id, request, response) {
+      var data = '';
+      response.on('data', function (chunk) {
+        data += chunk;
+      });
+      response.on('end', function () {
+        if (response.statusCode !== 200) {
+          callback(new Error(""+response.statusCode+" "+data));
+          return;
+        }
+        var decoded = JSON.parse(data);
+        if ("function" === typeof callback) {
           if (!decoded.error) {
             decoded.error = null;
           }
           callback(decoded.error, decoded.result);
-        });
-      }
+        }
+      });
     });
   };
 };
@@ -189,12 +219,12 @@ Server.prototype.listen = function(port, host) {
 
 
 //===----------------------------------------------------------------------===//
-// handleInvalidRequest
+// handleServerError
 //===----------------------------------------------------------------------===//
-Server.handleInvalidRequest = function(req, res) {
+Server.handleServerError = function(req, res, code, message) {
   res.writeHead(400, {'Content-Type': 'text/plain',
-                      'Content-Length': INVALID_REQUEST.length});
-  res.write(INVALID_REQUEST);
+                      'Content-Length': message.length});
+  res.write(message);
   res.end();
 }
 
@@ -211,14 +241,16 @@ Server.prototype.handlePOST = function(req, res) {
     var isStreaming = false;
 
     // Check for the required fields, and if they aren't there, then
-    // dispatch to the handleInvalidRequest function.
+    // dispatch to the handleServerError function.
     if(!(decoded.method && decoded.params && decoded.id)) {
-      Server.handleInvalidRequest(req, res);
+      Server.trace('-->', 'response (invalid request)');
+      Server.handleServerError(req, res, 400, INVALID_REQUEST);
       return;
     }
 
     if(!self.functions.hasOwnProperty(decoded.method)) {
-      Server.handleInvalidRequest(req, res);
+      Server.trace('-->', 'response (unknown method "' + decoded.method + '")');
+      Server.handleServerError(req, res, 400, "Unknown RPC call '"+decoded.method+"'");
       return;
     }
 
