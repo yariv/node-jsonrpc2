@@ -27,9 +27,6 @@ var math = {
 };
 server.exposeModule('math', math);
 
-/* Listen on port 8088 */
-server.listen(8088, 'localhost');
-
 /* By using a callback, we can delay our response indefinitely, leaving the
  request hanging until the callback emits success. */
 var delayed = {
@@ -62,7 +59,7 @@ var firehose = new events.EventEmitter();
 
 var listen = function (args, opts, callback) {
   function handleFirehoseEvent(event) {
-    opts.emit('event', event.data);
+    opts.call('event', event.data);
   };
   firehose.on('foobar', handleFirehoseEvent);
   opts.stream(function () {
@@ -73,3 +70,9 @@ var listen = function (args, opts, callback) {
 };
 
 server.expose('listen', listen);
+
+/* HTTP server on port 8088 */
+server.listen(8088, 'localhost');
+
+/* Raw socket server on port 8089 */
+server.listenRaw(8089, 'localhost');
