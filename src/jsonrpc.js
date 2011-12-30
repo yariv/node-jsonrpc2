@@ -5,6 +5,7 @@ var util = require('util');
 var events = require('events');
 var JsonParser = require('jsonparse');
 
+var UNAUTHORIZED = "Unauthorized\n";
 var METHOD_NOT_ALLOWED = "Method Not Allowed\n";
 var INVALID_REQUEST = "Invalid Request\n";
 
@@ -93,7 +94,7 @@ Endpoint.prototype.exposeModule = Endpoint.prototype.expose;
 /**
  * JSON-RPC Client.
  */
-var Client = function (port, host, user, password, type)
+var Client = function (port, host, user, password)
 {
   Endpoint.call(this);
 
@@ -166,6 +167,18 @@ Client.prototype.connectSocket = function connectSocket(callback)
   var self = this;
 
   var socket = net.connect(this.port, this.host, function () {
+    // Submit non-standard "auth" message for raw sockets.
+    if ("string" === typeof self.user &&
+        "string" === typeof self.password) {
+      conn.call("auth", [self.user, self.password], function (err) {
+        if (err) {
+          callback(err);
+        } else {
+          callback(null, conn);
+        }
+      });
+      return;
+    }
     if ("function" === typeof callback) {
       callback(null, conn);
     }
@@ -322,12 +335,18 @@ Server.prototype.listenHybrid = function listenHybrid(port, host) {
  */
 Server.handleHttpError = function(req, res, code, message)
 {
-  res.writeHead(code, {'Content-Type': 'text/plain',
-                       'Content-Length': message.length,
-                       'Allow': 'POST'});
+  var headers = {'Content-Type': 'text/plain',
+                 'Content-Length': message.length,
+                 'Allow': 'POST'};
+
+  if (code === 401) {
+    headers['WWW-Authenticate'] = 'Basic realm="JSON-RPC"';
+  }
+
+  res.writeHead(code, headers);
   res.write(message);
   res.end();
-}
+};
 
 /**
  * Handle HTTP POST request.
@@ -343,6 +362,21 @@ Server.prototype.handleHttp = function(req, res)
 
   var buffer = '';
   var self = this;
+
+  // Check authentication if we require it
+  if (this.authHandler) {
+    var authHeader = req.headers['authorization'] || '',   // get the header
+        authToken = authHeader.split(/\s+/).pop() || '',   // get the token
+        auth = new Buffer(authToken, 'base64').toString(), // base64 -> string
+        parts = auth.split(/:/),                           // split on colon
+        username = parts[0],
+        password = parts[1];
+    if (!this.authHandler(username, password)) {
+      Server.handleHttpError(req, res, 401, UNAUTHORIZED);
+      return;
+    }
+  }
+
   var handle = function (buf) {
     var decoded = JSON.parse(buf);
 
@@ -406,13 +440,53 @@ Server.prototype.handleHttp = function(req, res)
 Server.prototype.handleRaw = function handleRaw(socket)
 {
   Endpoint.trace('<--', 'Accepted socket connection');
+
+  var self = this;
+
   var conn = new SocketConnection(this, socket);
   var parser = new JsonParser();
+  var requireAuth = !!this.authHandler;
+
   parser.onValue = function (decoded) {
     if (this.stack.length) return;
 
-    conn.handleMessage(decoded);
+    // We're on a raw TCP socket. To enable authentication we implement a simple
+    // authentication scheme that is non-standard, but is easy to call from any
+    // client library.
+    //
+    // The authentication message is to be sent as follows:
+    //   {"method": "auth", "params": ["myuser", "mypass"], id: 0}
+    if (requireAuth) {
+      if (decoded.method !== "auth" ) {
+        // Try to notify client about failure to authenticate
+        if ("number" === typeof decoded.id) {
+          conn.sendReply("Error: Unauthorized", null, decoded.id);
+        }
+      } else {
+        // Handle "auth" message
+        if (Array.isArray(decoded.params) &&
+            decoded.params.length === 2 &&
+            self.authHandler(decoded.params[0], decoded.params[1])) {
+          // Authorization completed
+          requireAuth = false;
+
+          // Notify client about success
+          if ("number" === typeof decoded.id) {
+            conn.sendReply(null, true, decoded.id);
+          }
+        } else {
+          if ("number" === typeof decoded.id) {
+            conn.sendReply("Error: Invalid credentials", null, decoded.id);
+          }
+        }
+      }
+      // Make sure we explicitly return here - the client was not yet auth'd.
+      return;
+    } else {
+      conn.handleMessage(decoded);
+    }
   };
+
   socket.on('data', function (chunk) {
     try {
       parser.write(chunk);
@@ -435,6 +509,29 @@ Server.prototype.handleHybrid = function handleHybrid(httpServer, socket)
     // Re-emit first chunk
     socket.emit('data', chunk);
   });
+};
+
+/**
+ * Set the server to require authentication.
+ *
+ * Can be called with a custom handler function:
+ *   server.enableAuth(function (user, password) {
+ *     return true; // Do authentication and return result as boolean
+ *   });
+ * 
+ * Or just with a single valid username and password:
+ *   sever.enableAuth("myuser", "supersecretpassword");
+ */
+Server.prototype.enableAuth = function enableAuth(handler, password) {
+  if ("function" !== typeof handler) {
+    var user = "" + handler;
+    password = "" + password;
+    handler = function checkAuth(suppliedUser, suppliedPassword) {
+      return user === suppliedUser && password === suppliedPassword;
+    };
+  }
+
+  this.authHandler = handler;
 };
 
 var Connection = function Connection(ep) {
@@ -531,14 +628,18 @@ Connection.prototype.handleMessage = function handleMessage(msg)
         err = null;
       }
 
-      var data = JSON.stringify({
-        result: result,
-        error: err,
-        id: msg.id
-      });
-      this.write(data);
+      this.sendReply(err, result, msg.id);
     }).bind(this));
   }
+};
+
+Connection.prototype.sendReply = function sendReply(err, result, id) {
+  var data = JSON.stringify({
+    result: result,
+    error: err,
+    id: id
+  });
+  this.write(data);
 };
 
 var HttpServerConnection = function HttpServerConnection(server, req, res)
