@@ -1,18 +1,19 @@
-var sys = require('sys');
+var util = require('util');
 
 var TEST = module.exports = {
   passed: 0,
   failed: 0,
   assertions: 0,
 
+  output: "",
+
   test: function (desc, block) {
-    var _puts  = sys.puts,
-    output = "",
-    result = '?',
-    _boom = null;
-    sys.puts = function (s) { output += s + "\n"; }
+    var result = '?',
+        _boom = null;
+
+    TEST.output = "";
     try {
-      sys.print("  " + desc + " ...");
+      TEST.output += "  " + desc + " ...";
       block();
       result = '.';
     } catch(boom) {
@@ -21,16 +22,15 @@ var TEST = module.exports = {
       } else {
         result = 'E';
         _boom = boom;
-        sys.puts(boom.toString());
+        TEST.output += boom.toString();
       }
     }
-    sys.puts = _puts;
     if ( result == '.' ) {
-      sys.print(" OK\n");
+      process.stdout.write(TEST.output + " OK\n");
       TEST.passed += 1;
     } else {
-      sys.print(" FAIL\n");
-      sys.print(output.replace(/^/, "      ") + "\n");
+      process.stdout.write(TEST.output + " FAIL\n");
+      process.stdout.write(TEST.output.replace(/^/, "      ") + "\n");
       TEST.failed += 1;
       if ( _boom ) throw _boom;
     }
@@ -38,30 +38,30 @@ var TEST = module.exports = {
 
   assert: function (value, desc) {
     TEST.assertions += 1;
-    if ( desc ) sys.puts("ASSERT: " + desc);
+    if ( desc ) TEST.output += "ASSERT: " + desc;
     if ( !value ) throw 'FAIL';
   },
 
   assert_equal: function (expect, is) {
     assert(
       expect == is,
-      sys.inspect(expect) + " == " + sys.inspect(is)
+      util.inspect(expect) + " == " + util.inspect(is)
     );
   },
 
   assert_boom: function (message, block) {
     var error = null;
-    try { block() }
-    catch (boom) { error = boom }
+    try { block(); }
+    catch (boom) { error = boom; }
 
     if ( !error ) {
-      sys.puts('NO BOOM');
-      throw 'FAIL'
+      TEST.output += 'NO BOOM';
+      throw 'FAIL';
     }
     if ( error != message ) {
-      sys.puts('BOOM: ' + sys.inspect(error) +
-               ' [' + sys.inspect(message) + ' expected]');
-      throw 'FAIL'
+      TEST.output += 'BOOM: ' + util.inspect(error) +
+                     ' [' + util.inspect(message) + ' expected]';
+      throw 'FAIL';
     }
   },
 
@@ -75,7 +75,7 @@ var TEST = module.exports = {
 process.addListener('exit', function (code) {
   if ( !TEST.exit ) {
     TEST.exit = true;
-    sys.puts("" + TEST.passed + " passed, " + TEST.failed + " failed");
+    console.log("" + TEST.passed + " passed, " + TEST.failed + " failed");
     if ( TEST.failed > 0 ) { process.exit(1) };
   }
 });

@@ -1,19 +1,22 @@
 require('./test').extend(global);
 
-var sys = require('sys');
+var util = require('util');
 var rpc = require('../src/jsonrpc');
+var events = require('events');
 
 var server = new rpc.Server();
+
+rpc.Endpoint.trace = function () {};
 
 // MOCK REQUEST/RESPONSE OBJECTS
 var MockRequest = function(method) {
   this.method = method;
-  process.EventEmitter.call(this);
+  events.EventEmitter.call(this);
 };
-sys.inherits(MockRequest, process.EventEmitter);
+util.inherits(MockRequest, events.EventEmitter);
 
 var MockResponse = function() {
-  process.EventEmitter.call(this);
+  events.EventEmitter.call(this);
   this.writeHead = this.sendHeader = function(httpCode, httpHeaders) {
     this.httpCode = httpCode;
     this.httpHeaders = httpCode;
@@ -22,8 +25,9 @@ var MockResponse = function() {
     this.httpBody = httpBody; 
   };
   this.end = this.finish = function() {};
+  this.connection = new events.EventEmitter();
 };
-sys.inherits(MockResponse, process.EventEmitter);
+util.inherits(MockResponse, events.EventEmitter);
 
 // A SIMPLE MODULE
 var TestModule = {
@@ -46,8 +50,6 @@ test('Server.expose', function() {
 
 test('Server.exposeModule', function() {
   server.exposeModule('test', TestModule);
-  sys.puts(server.functions['test.foo']);
-  sys.puts(TestModule.foo);
   assert(server.functions['test.foo'] == TestModule.foo);
 });
 
@@ -56,17 +58,16 @@ test('Server.exposeModule', function() {
 test('GET Server.handleNonPOST', function() {
   var req = new MockRequest('GET');
   var res = new MockResponse();
-  rpc.Server.handleNonPOST(req, res);
+  server.handleHttp(req, res);
   assert(res.httpCode === 405);
 });
 
 function testBadRequest(testJSON) {
   var req = new MockRequest('POST');
   var res = new MockResponse();
-  server.handlePOST(req, res);
+  server.handleHttp(req, res);
   req.emit('data', testJSON);
   req.emit('end');
-  sys.puts(res.httpCode);
   assert(res.httpCode === 400);
 }
 
@@ -87,7 +88,18 @@ test('Missing object attribute (id)', function() {
 
 test('Unregistered method', function() {
   var testJSON = '{ "method": "notRegistered", "params": ["Hello, World!"], "id": 1 }';
-  testBadRequest(testJSON);
+  var req = new MockRequest('POST');
+  var res = new MockResponse();
+  try {
+  server.handleHttp(req, res);
+  }catch (e) {};
+  req.emit('data', testJSON);
+  req.emit('end');
+  assert(res.httpCode === 200);
+  var decoded = JSON.parse(res.httpBody);
+  assert(decoded.id === 1);
+  assert(decoded.error === 'Error: Unknown RPC call \'notRegistered\'');
+  assert(decoded.result === null);
 });
 
 // VALID REQUEST
@@ -96,7 +108,7 @@ test('Simple synchronous echo', function() {
   var testJSON = '{ "method": "echo", "params": ["Hello, World!"], "id": 1 }';
   var req = new MockRequest('POST');
   var res = new MockResponse();
-  server.handlePOST(req, res);
+  server.handleHttp(req, res);
   req.emit('data', testJSON);
   req.emit('end');
   assert(res.httpCode === 200);
@@ -117,7 +129,7 @@ test('Using promise', function() {
   var req = new MockRequest('POST');
   var res = new MockResponse();
   // Have the server handle that request
-  server.handlePOST(req, res);
+  server.handleHttp(req, res);
   req.emit('data', testJSON);
   req.emit('end');
   // Now the request has completed, and in the above synchronous test, we
@@ -143,7 +155,7 @@ test('Triggering an errback', function() {
   var testJSON = '{ "method": "errbackEcho", "params": ["Hello, World!"], "id": 1 }';
   var req = new MockRequest('POST');
   var res = new MockResponse();
-  server.handlePOST(req, res);
+  server.handleHttp(req, res);
   req.emit('data', testJSON);
   req.emit('end');
   assert(res['httpCode'] == null);

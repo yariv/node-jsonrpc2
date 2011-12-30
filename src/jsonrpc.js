@@ -1,4 +1,4 @@
-var sys = require('sys');
+var util = require('util');
 var net = require('net');
 var http = require('http');
 var util = require('util');
@@ -28,7 +28,7 @@ util.inherits(Endpoint, events.EventEmitter);
  */
 Endpoint.trace = function(direction, message)
 {
-  sys.puts('   ' + direction + '   ' + message);
+  console.log('   ' + direction + '   ' + message);
 }
 
 /**
