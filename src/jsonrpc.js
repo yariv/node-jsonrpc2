@@ -70,7 +70,7 @@ Endpoint.prototype.expose = function(name, func, scope)
 Endpoint.prototype.handleCall = function handleCall(decoded, conn, callback)
 {
   Endpoint.trace('<--', 'Request (id ' + decoded.id + '): ' + 
-                 decoded.method + '(' + decoded.params.join(', ') + ')');
+                 decoded.method + '(' + JSON.stringify(decoded.params) + ')');
 
   if (!this.functions.hasOwnProperty(decoded.method)) {
     callback(new Error("Unknown RPC call '"+decoded.method+"'"));
